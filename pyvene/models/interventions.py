@@ -450,7 +450,6 @@ class SigmoidMaskIntervention(TrainableIntervention, LocalistRepresentationInter
 class LowRankRotatedSpaceIntervention(TrainableIntervention, DistributedRepresentationIntervention):
 
     """Intervention in the rotated space."""
-
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         rotate_layer = LowRankRotateLayer(self.embed_dim, kwargs["low_rank_dimension"])
@@ -459,7 +458,7 @@ class LowRankRotatedSpaceIntervention(TrainableIntervention, DistributedRepresen
     def forward(self, base, source, subspaces=None):
         rotated_base = self.rotate_layer(base)
         rotated_source = self.rotate_layer(source)
-        if subspaces is not None:
+        if subspaces is not None and False:
             if self.use_fast or _can_use_fast(subspaces):
                 if self.subspace_partition is None:
                     sel_subspace_indices = subspaces[0]

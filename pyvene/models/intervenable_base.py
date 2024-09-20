@@ -1,6 +1,6 @@
 import json, logging, torch, types
 import numpy as np
-from collections import OrderedDict
+from collections import OrderedDict, defaultdict
 from typing import List, Optional, Tuple, Union, Dict, Any
 
 from .constants import *
@@ -24,7 +24,8 @@ from torch import optim
 from transformers import get_linear_schedule_with_warmup
 from dataclasses import dataclass
 from transformers.utils import ModelOutput
-from tqdm import tqdm, trange
+from tqdm.auto import tqdm, trange
+import wandb
 
 try:
     import nnsight
@@ -1004,6 +1005,7 @@ class IntervenableNdifModel(BaseModel):
             return base_outputs, None
         # broadcast
         unit_locations = self._broadcast_unit_locations(get_batch_size(base), unit_locations)
+
         sources = [None]*len(self._intervention_group) if sources is None else sources
         sources = self._broadcast_sources(sources)
         activations_sources = self._broadcast_source_representations(activations_sources)
@@ -1886,7 +1888,6 @@ class IntervenableModel(BaseModel):
         sources = self._broadcast_sources(sources)
         activations_sources = self._broadcast_source_representations(activations_sources)
         subspaces = self._broadcast_subspaces(get_batch_size(base), subspaces)
-        
         self._input_validation(
             base,
             sources,
@@ -2214,8 +2215,11 @@ class IntervenableModel(BaseModel):
         compute_loss,
         compute_metrics,
         inputs_collator,
+        wandb_project=None,
+        wandb_entity=None,
         **kwargs,
     ):
+
         """
         The method find alignment.
 
@@ -2225,6 +2229,10 @@ class IntervenableModel(BaseModel):
         1) we use Adam, and linear lr scheduling.
         2) you can pass in lr or using default 1e-3
         """
+        # Initialize wandb logger
+        if wandb_project is not None:
+            wandb.init(project=wandb_project, entity=wandb_entity, config=kwargs)
+        
         # preprocess basic kwargs
         lr = kwargs["lr"] if "lr" in kwargs else 1e-3
         epochs = kwargs["epochs"] if "epochs" in kwargs else 10
@@ -2268,17 +2276,25 @@ class IntervenableModel(BaseModel):
         epoch_iterator = trange(0, int(epochs), desc="Epoch")
         total_step = 0
         for epoch in epoch_iterator:
-            for step, inputs in enumerate(train_dataloader):
+            step_iterator = tqdm(enumerate(train_dataloader), desc="Step", total=len(train_dataloader), leave=False, position=1)
+            for step, inputs in step_iterator:
                 if inputs_collator is not None:
                     inputs = inputs_collator(inputs)
+                
                 b_s = inputs["input_ids"].shape[0]
-                unit_location_dict = self._batch_process_unit_location(inputs)
+                # unit_location_dict = self._batch_process_unit_location(inputs)
+                unit_location_dict = {
+                    "sources->base":
+                        inputs["sources->base"].squeeze(1)[0].item()
+
+                }
                 _, counterfactual_outputs = self(
-                    {"input_ids": inputs["input_ids"]},
-                    [{"input_ids": inputs["source_input_ids"]}],
+                    {"input_ids": inputs["input_ids"], "attention_mask": inputs["attention_mask"]},
+                    [{"input_ids": inputs["source_input_ids"], "attention_mask": inputs["source_attention_mask"]}],
                     unit_location_dict,
                     subspaces=inputs["subspaces"] if "subspaces" in inputs else None,
                 )
+                
                 eval_metrics = compute_metrics(
                     [counterfactual_outputs.logits], [inputs["labels"]]
                 )
@@ -2286,7 +2302,10 @@ class IntervenableModel(BaseModel):
                 # loss and backprop
                 loss = compute_loss(counterfactual_outputs.logits, inputs["labels"])
                 loss_str = round(loss.item(), 2)
-                epoch_iterator.set_postfix({"loss": loss_str, "acc": eval_metrics})
+                step_iterator.set_postfix({"loss": loss_str, "acc": eval_metrics})
+                
+                if wandb_project is not None:
+                    wandb.log({"loss": loss_str, "acc": eval_metrics})
 
                 if gradient_accumulation_steps > 1:
                     loss = loss / gradient_accumulation_steps
@@ -2299,18 +2318,20 @@ class IntervenableModel(BaseModel):
                         self.set_temperature(temperature_schedule[total_step])
                 total_step += 1
 
+
     def eval_alignment(
         self,
         eval_dataloader,
         compute_metrics,
         inputs_collator,
+        no_intervention=False,
         **kwargs,
     ):
         """
         The method evaluate alignment.
         """
 
-        all_metrics = []
+        all_metrics = defaultdict(list)
         all_num_examples = []
         torch.cuda.empty_cache()
         with torch.no_grad():
@@ -2318,23 +2339,35 @@ class IntervenableModel(BaseModel):
                 if inputs_collator is not None:
                     inputs = inputs_collator(inputs)
                 b_s = inputs["input_ids"].shape[0]
-                unit_location_dict = self._batch_process_unit_location(
-                    inputs,
-                )
-                _, counterfactual_outputs = self(
-                    {"input_ids": inputs["input_ids"]},
-                    [{"input_ids": inputs["source_input_ids"]}],
+                # unit_location_dict = self._batch_process_unit_location(
+                #     inputs,
+                # )
+                unit_location_dict = {
+                    "sources->base":
+                        inputs["sources->base"].squeeze(1)[0].item()
+
+                }
+                if no_intervention:
+                    counterfactual_outputs = self.model(input_ids=inputs["input_ids"], attention_mask=inputs["attention_mask"])
+                else:
+                    _, counterfactual_outputs = self(
+                        {"input_ids": inputs["input_ids"], "attention_mask": inputs["attention_mask"]},
+                    [{"input_ids": inputs["source_input_ids"], "attention_mask": inputs["source_attention_mask"]}],
                     unit_location_dict,
                     subspaces=inputs["subspaces"] if "subspaces" in inputs else None,
                 )
                 eval_metrics = compute_metrics(
                     [counterfactual_outputs.logits], [inputs["labels"]]
                 )
-                all_metrics += [eval_metrics]
+                print(eval_metrics)
+                for k, v in eval_metrics.items():
+                    all_metrics[k] += [v]
                 all_num_examples += [b_s]
-        result = weighted_average(all_metrics, all_num_examples)
+        results = {
+            k: weighted_average(v, all_num_examples) for k, v in all_metrics.items()
+        }
 
-        return result
+        return results
 
 
 def build_intervenable_model(config, model, **kwargs):

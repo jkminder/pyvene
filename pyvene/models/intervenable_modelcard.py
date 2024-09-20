@@ -40,7 +40,6 @@ global type_to_dimension_mapping
 global output_to_subcomponent_fn_mapping
 global scatter_intervention_output_fn_mapping
 
-
 type_to_module_mapping = {
     hf_models.gpt2.modeling_gpt2.GPT2Model: gpt2_type_to_module_mapping,
     hf_models.gpt2.modeling_gpt2.GPT2LMHeadModel: gpt2_lm_type_to_module_mapping,
@@ -69,6 +68,8 @@ type_to_module_mapping = {
     GRUForClassification: gru_classifier_type_to_module_mapping,
     BackpackGPT2LMHeadModel: backpack_gpt2_lm_type_to_module_mapping,
     # new model type goes here after defining the model files
+    hf_models.gemma2.modeling_gemma2.Gemma2Model: gemma_type_to_module_mapping,
+    hf_models.gemma2.modeling_gemma2.Gemma2ForCausalLM: gemma_lm_type_to_module_mapping,
 }
 if enable_blip:
     type_to_module_mapping[BlipWrapper] = blip_wrapper_type_to_module_mapping
@@ -102,6 +103,9 @@ type_to_dimension_mapping = {
     GRUForClassification: gru_classifier_type_to_dimension_mapping,
     BackpackGPT2LMHeadModel: backpack_gpt2_lm_type_to_dimension_mapping,
     # new model type goes here after defining the model files
+    hf_models.gemma2.modeling_gemma2.Gemma2Model: gemma_type_to_dimension_mapping,
+    hf_models.gemma2.modeling_gemma2.Gemma2ForCausalLM: gemma_lm_type_to_dimension_mapping,
+
 }
 if enable_blip:
     type_to_dimension_mapping[BlipWrapper] = blip_wrapper_type_to_dimension_mapping
